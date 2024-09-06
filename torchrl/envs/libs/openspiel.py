@@ -188,10 +188,10 @@ class OpenSpielWrapper(_EnvWrapper):
         game = env.get_game()
         game_type = game.get_type()
 
-        if game.max_chance_outcomes() != 0:
-            raise NotImplementedError(
-                f"The game '{game_type.short_name}' has chance nodes, which are not yet supported."
-            )
+        #if game.max_chance_outcomes() != 0:
+        #    raise NotImplementedError(
+        #        f"The game '{game_type.short_name}' has chance nodes, which are not yet supported."
+        #    )
         if game_type.dynamics == self.lib.GameType.Dynamics.MEAN_FIELD:
             # NOTE: It is unclear from the OpenSpiel documentation what exactly
             # "mean field" means exactly, and there is no documentation on the
@@ -321,6 +321,29 @@ class OpenSpielWrapper(_EnvWrapper):
             action_spec[group] = group_action_spec
             reward_spec[group] = group_reward_spec
 
+        # Add chance actions if the game has chance nodes
+        self.has_chance_actions = game.max_chance_outcomes() > 0
+        if self.has_chance_actions:
+            action_spec_cls = Categorical if self.categorical_actions else OneHot
+            # TODO: Make this weighted, since `state.chance_outcomes()` outputs
+            # a probability distribution! For instance:
+            #
+            # >>> game = pyspiel.load_game('liars_dice')
+            # >>> env = game.new_initial_state()
+            # >>> env.is_chance_node()
+            # True
+            # >>> env.chance_outcomes()
+            # [(0, 0.16666666666666666), (1, 0.16666666666666666), (2,
+            # 0.16666666666666666), (3, 0.16666666666666666), (4,
+            # 0.16666666666666666), (5, 0.16666666666666666)]
+            action_spec["chance"] = Composite(
+                action=action_spec_cls(
+                    env.num_distinct_actions(),
+                    dtype=torch.int64,
+                    device=self.device,
+                )
+            )
+
         if self.return_state:
             observation_spec["state"] = NonTensor([])
 
@@ -343,7 +366,7 @@ class OpenSpielWrapper(_EnvWrapper):
         return self._env.current_player()
 
     def _update_action_mask(self):
-        if self._env.is_terminal():
+        if self._env.is_terminal() or self._env.is_chance_node():
             agents_acting = []
         else:
             agents_acting = [

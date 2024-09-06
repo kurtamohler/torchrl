@@ -3858,6 +3858,7 @@ _openspiel_games = [
     "havannah",
     "hex",
     "kriegspiel",
+    "liars_dice",
     "mancala",
     "nim",
     "nine_mens_morris",
