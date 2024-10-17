@@ -131,6 +131,10 @@ class ReplayBuffer:
             .. warning:: As of now, the generator has no effect on the transforms.
         shared (bool, optional): whether the buffer will be shared using multiprocessing or not.
             Defaults to ``False``.
+        compile (bool or dict of kwargs, optional): if ``True``, the bottleneck of
+            the :meth:`~extend` method will be compiled with :func:`~torch.compile`.
+            Keyword arguments can also be passed to torch.compile with this arg.
+            Defaults to ``False``.
 
     Examples:
         >>> import torch
@@ -216,11 +220,27 @@ class ReplayBuffer:
         checkpointer: "StorageCheckpointerBase" | None = None,  # noqa: F821
         generator: torch.Generator | None = None,
         shared: bool = False,
+        compile: bool | dict = False,
     ) -> None:
         self._storage = storage if storage is not None else ListStorage(max_size=1_000)
         self._storage.attach(self)
         self._sampler = sampler if sampler is not None else RandomSampler()
-        self._writer = writer if writer is not None else RoundRobinWriter()
+
+        self._compile = bool(compile)
+        if self._compile:
+            if writer is not None:
+                if not writer.compile:
+                    raise RuntimeError(
+                        "Expected 'writer.compile' to be True, but got False."
+                    )
+            if isinstance(compile, dict):
+                compile_kwargs = compile
+            else:
+                compile_kwargs = {}
+            self._extend = torch.compile(self._extend, **compile_kwargs)
+        self._writer = (
+            writer if writer is not None else RoundRobinWriter(compile=compile)
+        )
         self._writer.register_storage(self._storage)
 
         self._get_collate_fn(collate_fn)
@@ -291,6 +311,10 @@ class ReplayBuffer:
         self._storage._rng = generator
         self._sampler._rng = generator
         self._writer._rng = generator
+
+    @property
+    def compile(self):
+        return self._compile
 
     @property
     def dim_extend(self):

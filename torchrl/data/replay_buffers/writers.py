@@ -35,13 +35,27 @@ from torchrl.data.replay_buffers.utils import _is_int, _reduce
 
 
 class Writer(ABC):
-    """A ReplayBuffer base Writer class."""
+    """A ReplayBuffer base Writer class.
+
+    Keyword Args:
+        compile (bool or dict of kwargs, optional): if ``True``, the bottleneck of
+            the :meth:`~extend` method will be compiled with :func:`~torch.compile`.
+            Keyword arguments can also be passed to torch.compile with this arg.
+            Defaults to ``False``.
+    """
 
     _storage: Storage
     _rng: torch.Generator | None = None
 
-    def __init__(self) -> None:
+    def __init__(self, *, compile: bool | dict = False) -> None:
         self._storage = None
+        self._compile = bool(compile)
+        if self._compile:
+            raise RuntimeError("Only derived classes of 'Writer' can be compiled.")
+
+    @property
+    def compile(self):
+        return self._compile
 
     def register_storage(self, storage: Storage) -> None:
         self._storage = storage
@@ -138,11 +152,25 @@ class ImmutableDatasetWriter(Writer):
 
 
 class RoundRobinWriter(Writer):
-    """A RoundRobin Writer class for composable replay buffers."""
+    """A RoundRobin Writer class for composable replay buffers.
 
-    def __init__(self, **kw) -> None:
+    Keyword Args:
+        compile (bool or dict of kwargs, optional): if ``True``, the bottleneck of
+            the :meth:`~extend` method will be compiled with :func:`~torch.compile`.
+            Keyword arguments can also be passed to torch.compile with this arg.
+            Defaults to ``False``.
+    """
+
+    def __init__(self, *, compile: bool | dict = False, **kw) -> None:
         super().__init__(**kw)
         self._cursor = 0
+        self._compile = bool(compile)
+        if self._compile:
+            if isinstance(compile, dict):
+                compile_kwargs = compile
+            else:
+                compile_kwargs = {}
+            self.extend = torch.compile(self.extend, **compile_kwargs)
 
     def dumps(self, path):
         path = Path(path).absolute()
