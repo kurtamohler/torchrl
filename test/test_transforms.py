@@ -116,6 +116,7 @@ from torchrl.envs import (
     FrameSkipTransform,
     GrayScale,
     gSDENoise,
+    Hash,
     InitTracker,
     MultiStepTransform,
     NoopResetEnv,
@@ -2175,6 +2176,33 @@ class TestTrajCounter(TransformBase):
     @pytest.mark.parametrize("batch", [[], [4], [6, 4]])
     def test_transform_no_env(self, device, batch):
         pytest.skip("TrajCounter cannot be called without env")
+
+
+class TestHash(TransformBase):
+    @pytest.mark.parametrize("datatype", ["tensor", "str"])
+    def test_transform_no_env(self, datatype):
+        if datatype == "tensor":
+            obs = torch.tensor(10)
+        elif datatype == "str":
+            obs = "abcdefg"
+        else:
+            raise RuntimeError(f"please add a test case for datatype {datatype}")
+
+        td = TensorDict(
+            {
+                "observation": obs,
+            }
+        )
+        t = Hash(in_keys=["observation"], out_keys=["hash"])
+        td_hashed = t(td)
+
+        assert td_hashed["observation"] is td["observation"]
+        assert td_hashed["hash"] == hash(td["observation"])
+
+    def test_single_trans_env_check(self):
+        t = Hash(in_keys=["observation"], out_keys=["hash"])
+        env = TransformedEnv(ContinuousActionVecMockEnv(), t)
+        check_env_specs(env)
 
 
 class TestStack(TransformBase):
