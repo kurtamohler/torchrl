@@ -964,6 +964,33 @@ class MCTSForest:
             self.max_size = self.data_map.max_size
 
     def extend(self, rollout, *, return_node: bool = False):
+        """Add a rollout to the forest.
+
+        Nodes are only added to a tree at points where rollouts diverge from
+        each other and at the endpoints of rollouts.
+
+        If there is no existing tree that matches the first steps of the
+        rollout, a new tree is added. Only one node is created, for the final
+        step.
+
+        If there is an existing tree that matches, the rollout is added to that
+        tree. If the rollout diverges from all other rollouts in the tree at
+        some step, a new node is created before the step where the rollouts
+        diverge, and a leaf node is created for the final step of the rollout.
+        If all of the rollout's steps match with a previously added rollout,
+        nothing changes.  If the rollout matches up to a leaf node of a tree but
+        continues beyond it, that node is extended to the end of the rollout,
+        and no new nodes are created.
+
+        Args:
+            rollout (TensorDict): The rollout to add to the forest.
+            return_node (bool, optional): If True, the method returns the added
+                node. Default is ``False``.
+
+        Returns:
+            Tree: The node that was added to the forest. This is only
+                returned if ``return_node`` is True.
+        """
         source, dest = (
             rollout.exclude("next").copy(),
             rollout.select("next", *self.action_keys).copy(),
@@ -988,6 +1015,34 @@ class MCTSForest:
         self.node_map[source] = TensorDict.lazy_stack(value.unbind(0))
         if return_node:
             return self.get_tree(rollout)
+
+    def add_to_tree(self, tree, step, *, return_node: bool = False):
+        """Add a single step to a tree.
+
+        The tree must already exist in the forest.
+
+        The step must have a "next" attribute, and the step (minus the "next"
+        attribute and the action) must match the node data for the given tree. A
+        new node is created for the "next" attribute, if it does not already
+        exist.
+        """
+
+    def add_root(self, root, *, return_node: bool = False):
+        """Create a new tree for an initial step.
+
+        If a tree already has the given root, the forest does not
+        change.
+        """
+        tree = self.get_tree(root)
+
+        if tree is None:
+            self.node_map[source] = None
+
+            tree = self.get_tree(root)
+
+        if return_node:
+            return tree
+
 
     def add(self, step, *, return_node: bool = False):
         source, dest = (
@@ -1021,6 +1076,8 @@ class MCTSForest:
         index: torch.Tensor | None = None,
         compact: bool = True,
     ) -> Tuple[Tree, torch.Tensor | None, torch.Tensor | None]:
+        if self.node_map is None:
+            return None
         root = root.select(*self.node_map.in_keys)
         node_meta = None
         if root in self.node_map:
@@ -1094,7 +1151,10 @@ class MCTSForest:
     ):
         q = deque()
         memo = {}
-        tree, indices, hash = self._make_local_tree(root, index=index, compact=compact)
+        local_tree = self._make_local_tree(root, index=index, compact=compact)
+        if local_tree is None:
+            return None
+        tree, indices, hash = local_tree
         tree.node_id = 0
 
         result = tree

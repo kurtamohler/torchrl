@@ -684,6 +684,101 @@ class TestMCTSForest:
                 ).all()
                 prev_tree = subtree
 
+    def test_forest_add_root(self):
+        forest = MCTSForest()
+
+        td_reset = TensorDict({
+            'observation': torch.tensor(0),
+        })
+
+        forest.add_root(td_reset)
+
+    def test_forest_extend(self):
+        def make_rollout(observations, actions):
+            assert len(observations) == len(actions) + 1
+            return TensorDict({
+                'observation': torch.tensor(observations[:-1]),
+                'action': torch.tensor(actions),
+                'next': TensorDict({
+                    'observation': torch.tensor(observations[1:]),
+                })
+            }, [len(actions)])
+
+        forest = MCTSForest()
+
+        # After adding one rollout, there should be only one node in the tree,
+        # and it should represent the last step from the rollout.
+        r0 = make_rollout([0, 1, 2, 3], [0, 0, 0])
+        forest.extend(r0)
+        tree = forest.get_tree(r0[0])
+        assert tree.subtree is None
+        assert (tree.node_data == r0[-1]['next']).all()
+        assert (tree.rollout == r0).all()
+
+        # After adding a rollout that matches with an existing leaf node in the
+        # tree but continues beyond it, that leaf node should just be updated to
+        # the end of the new rollout.
+        r1 = make_rollout([0, 1, 2, 3, 4, 5], [0, 0, 0, 0, 0])
+        forest.extend(r1)
+        tree = forest.get_tree(r0[0])
+        assert tree.subtree is None
+        assert (tree.node_data == r1[-1]['next']).all()
+        assert (tree.rollout == r1).all()
+
+        # Adding a rollout that was already added should change nothing.
+        forest.extend(r1)
+        tree = forest.get_tree(r0[0])
+        assert tree.subtree is None
+        assert (tree.node_data == r1[-1]['next']).all()
+        assert (tree.rollout == r1).all()
+
+        # Adding a rollout that matches the first two actions but the third
+        # action diverges should create a new node after the second action. It
+        # should also add a new node for the final step of the rollout.
+        r2 = make_rollout([0, 1, 2, 6, 7], [0, 0, 1, 0])
+        forest.extend(r2)
+
+        print(r2[1])
+        tree = forest.get_tree(r2[0])
+        print(tree.rollout['observation'])
+
+        tree = forest.get_tree(r0[0])
+        assert len(tree.subtree) == 2
+        assert tree.subtree[0].subtree is None
+        assert tree.subtree[1].subtree is None
+        assert (tree.node_data == r2[1]['next']).all()
+        assert (tree.subtree[0].node_data == r1[-1]['next']).all()
+        assert (tree.subtree[1].node_data == r2[-1]['next']).all()
+
+
+        r3 = make_rollout([0, 1, 2, 8, 9], [0, 0, 2, 0])
+        forest.extend(r3)
+        tree = forest.get_tree(r0[0])
+        assert len(tree.subtree) == 3
+        assert tree.subtree[0].subtree is None
+        assert tree.subtree[1].subtree is None
+        assert tree.subtree[2].subtree is None
+        assert (tree.node_data == r2[1]['next']).all()
+        assert (tree.subtree[0].node_data == r1[-1]['next']).all()
+        assert (tree.subtree[1].node_data == r2[-1]['next']).all()
+        assert (tree.subtree[2].node_data == r3[-1]['next']).all()
+
+        r4 = make_rollout([0, 1, 10, 11, 12, 13], [0, 1, 0, 0, 0])
+        forest.extend(r4)
+        tree = forest.get_tree(r0[0])
+        assert len(tree.subtree) == 2
+        assert len(tree.subtree[0].subtree) == 3
+        assert tree.subtree[0].subtree[0].subtree is None
+        assert tree.subtree[0].subtree[1].subtree is None
+        assert tree.subtree[0].subtree[2].subtree is None
+        assert tree.subtree[1].subtree is None
+        assert (tree.node_data == r4[0]['next']).all()
+        assert (tree.subtree[0].node_data == r2[1]['next']).all()
+        assert (tree.subtree[0].subtree[0].node_data == r1[-1]['next']).all()
+        assert (tree.subtree[0].subtree[1].node_data == r2[-1]['next']).all()
+        assert (tree.subtree[0].subtree[2].node_data == r3[-1]['next']).all()
+        assert (tree.subtree[1].node_data == r4[-1]['next']).all()
+
 
 if __name__ == "__main__":
     args, unknown = argparse.ArgumentParser().parse_known_args()
