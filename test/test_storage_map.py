@@ -20,7 +20,7 @@ from torchrl.data.map import (
     SipHash,
     TensorDictMap,
 )
-from torchrl.envs import GymEnv
+from torchrl.envs import GymEnv, ChessEnv, ExcludeTransform
 
 _has_gym = importlib.util.find_spec("gymnasium", None) or importlib.util.find_spec(
     "gym", None
@@ -684,6 +684,112 @@ class TestMCTSForest:
                 ).all()
                 prev_tree = subtree
 
+    # Build a tree of all possible states in a game of chess in breadth-first
+    # order up to some depth
+    @pytest.mark.parametrize("stateful", [True])
+    def test_breadth_first(self, stateful):
+        env = ChessEnv(
+            include_pgn=True,
+            include_hash=True,
+            include_hash_inv=True,
+            stateful=stateful,
+            mask_actions=False,
+        )
+        #env.append_transform(ExcludeTransform("pgn"))
+        forest = MCTSForest()
+        forest.reward_keys = env.reward_keys
+        forest.done_keys = env.done_keys
+        forest.action_keys = env.action_keys
+        #forest.observation_keys = ["pgn_hash", "turn", "action_mask"]
+        forest.observation_keys = ["pgn_hash", "turn"]
+
+        td_reset = env.reset()
+
+        print('----------------------------------')
+        #print(td_reset["pgn"])
+        print(td_reset["pgn_hash"])
+        print('----------------------------------')
+
+        max_actions_per_step = 2
+
+        if stateful:
+            all_first_actions = env.all_actions()[:max_actions_per_step]
+        else:
+            all_first_actions = env.all_actions(td_reset.clone())[:max_actions_per_step]
+
+        for action in all_first_actions:
+            if stateful:
+                tmp = env.reset(td_reset.clone())
+                td = env.step(td_reset.clone().update(action)).exclude(("next", "pgn"), "pgn")
+                assert (td_reset["pgn_hash"] == tmp["pgn_hash"]).all()
+            else:
+                td = env.step(td_reset.clone().update(action))
+
+            assert (td["pgn_hash"] == td_reset["pgn_hash"]).all()
+
+            print('----------------------------------')
+            print(td)
+            #print(td["pgn"])
+            print(td["pgn_hash"])
+            print("\n")
+            #print(td["next", "pgn"])
+            print(td["next", "pgn_hash"])
+            print('----------------------------------')
+
+            forest.extend(td.unsqueeze(0))
+
+        tree = forest.get_tree(td_reset)
+        assert len(tree.subtree) == all_first_actions.shape[0]
+
+        def add_one_level(tree, max_actions):
+            if tree.subtree is None:
+                td_before = tree.rollout[-1]["next"]
+
+                if stateful:
+                    env.reset(td_before.clone())
+                    all_actions = env.all_actions()[:max_actions_per_step]
+                else:
+                    all_actions = env.all_actions(td_before.clone())[:max_actions_per_step]
+
+                for action in all_actions[:max_actions]:
+                    if stateful:
+                        tmp = env.reset(td_before.clone())
+                        td = env.step(td_before.clone().update(action)).exclude(("next", "pgn"), "pgn")
+                        assert (td_before["pgn_hash"] == tmp["pgn_hash"]).all()
+                    else:
+                        td = env.step(td_before.clone().update(action))
+
+                    assert (td["pgn_hash"] == td_before["pgn_hash"]).all()
+
+                    print('----------------------------------')
+                    #print(td["pgn"])
+                    print(td["pgn_hash"])
+                    print("\n")
+                    #print(td["next", "pgn"])
+                    print(td["next", "pgn_hash"])
+                    print('----------------------------------')
+
+                    td_to_add = td.select(*tree.rollout.keys())
+                    print(td_to_add)
+                    print(tree.rollout)
+
+                    rollout = torch.cat([tree.rollout.clone(), td_to_add.unsqueeze(0)])
+
+                    print(rollout)
+
+                    #td = td.select(*forest.action_keys, *forest.observation_keys)
+                    #td["next"] = td_next
+
+                    #rollout = torch.cat([tree.rollout.clone(), td.unsqueeze(0)], dim=0).clone()
+                    #forest.extend(rollout)
+            else:
+                for subtree in tree.subtree:
+                    print('hi')
+                    add_one_level(subtree, max_actions)
+            
+        for _ in range(1):
+            tree = forest.get_tree(td_reset)
+            add_one_level(tree, max_actions_per_step)
 
 if __name__ == "__main__":
     args, unknown = argparse.ArgumentParser().parse_known_args()

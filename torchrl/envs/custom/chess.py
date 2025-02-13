@@ -44,8 +44,10 @@ class _ChessMeta(_EnvPostInit):
             maybe_add_keys(instance.include_fen, "fen", "fen_hash")
             maybe_add_keys(instance.include_pgn, "pgn", "pgn_hash")
 
+            hash = Hash(in_keys, out_keys, in_keys_inv, out_keys_inv)
+            hash.set_missing_tolerance(True)
             instance = instance.append_transform(
-                Hash(in_keys, out_keys, in_keys_inv, out_keys_inv)
+                hash
             )
         elif include_hash_inv:
             raise ValueError(

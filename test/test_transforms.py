@@ -2547,7 +2547,7 @@ class TestHash(TransformBase):
 
         assert len(t._repertoire) == 4
 
-        inv_inputs = [t.inv(output.clone()) for output in outputs]
+        inv_inputs = [t.inv(output.clone().exclude("observation")) for output in outputs]
 
         for input, inv_input in zip(inputs, inv_inputs):
             if torch.is_tensor(input["observation"]):

@@ -53,7 +53,7 @@ from torchrl.envs.batched_envs import _stackable
 from torchrl.envs.gym_like import default_info_dict_reader
 from torchrl.envs.libs.dm_control import _has_dmc, DMControlEnv
 from torchrl.envs.libs.gym import _has_gym, gym_backend, GymEnv, GymWrapper
-from torchrl.envs.transforms import Compose, StepCounter, TransformedEnv
+from torchrl.envs.transforms import Compose, StepCounter, TransformedEnv, Hash
 from torchrl.envs.transforms.transforms import (
     AutoResetEnv,
     AutoResetTransform,
@@ -3806,6 +3806,38 @@ class TestChessEnv:
                 )
 
             td0 = td1["next"]
+
+    @pytest.mark.parametrize("stateful", [False, True])
+    @pytest.mark.parametrize("include_san", [False, True])
+    def test_env_reset_with_hash(self, stateful, include_san):
+        env = ChessEnv(
+            include_fen=True,
+            include_hash=True,
+            include_hash_inv=True,
+            stateful=stateful,
+            include_san=include_san,
+        )
+        cases = [
+            # (fen, num_legal_moves)
+            ("5R1k/8/8/8/6R1/8/8/5K2 b - - 0 1", 1),
+            ("8/8/2kq4/4K3/1R3Q2/8/8/8 w - - 0 1", 2),
+            ("6R1/8/8/4rq2/3pPk2/5n2/8/2B1R2K b - e3 0 1", 2),
+        ]
+
+        for fen, num_legal_moves in cases:
+            # Load the state by fen.
+            td = env.reset(TensorDict({"fen": fen}))
+            assert td["fen"] == fen
+            assert td["action_mask"].sum() == num_legal_moves
+
+            # Reset to initial state just to make sure that the next reset
+            # actually changes the state.
+            assert env.reset()["action_mask"].sum() == 20
+
+            # Load the state by fen hash and make sure it gives the same output
+            # as before.
+            td_check = env.reset(td.select("fen_hash"))
+            assert (td_check == td).all()
 
     @pytest.mark.skipif(not _has_tv, reason="torchvision not found.")
     @pytest.mark.skipif(not _has_cairosvg, reason="cairosvg not found.")
