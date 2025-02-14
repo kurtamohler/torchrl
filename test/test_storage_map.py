@@ -20,11 +20,12 @@ from torchrl.data.map import (
     SipHash,
     TensorDictMap,
 )
-from torchrl.envs import GymEnv
+from torchrl.envs import ChessEnv, GymEnv
 
 _has_gym = importlib.util.find_spec("gymnasium", None) or importlib.util.find_spec(
     "gym", None
 )
+_has_chess = importlib.util.find_spec("chess") is not None
 
 
 class TestHash:
@@ -683,6 +684,138 @@ class TestMCTSForest:
                     == subtree.rollout[..., -1]["next", "observation"]
                 ).all()
                 prev_tree = subtree
+
+    # Build a tree of all possible states in a game of chess in breadth-first
+    # order up to some depth
+    @pytest.mark.skipif(not _has_chess, reason="chess not found")
+    @pytest.mark.parametrize("stateful", [False, True])
+    def test_breadth_first(self, stateful):
+        env = ChessEnv(
+            include_pgn=True,
+            include_hash=True,
+            include_hash_inv=True,
+            stateful=stateful,
+            mask_actions=True,
+        )
+        forest = MCTSForest()
+        forest.reward_keys = env.reward_keys
+        forest.done_keys = env.done_keys
+        forest.action_keys = env.action_keys
+        forest.observation_keys = ["pgn_hash", "turn", "action_mask"]
+
+        # Don't explore all nodes at each step--that would take a lot of time
+        # and memory for chess.
+        max_actions_per_step = 3
+
+        # TODO: If this is larger than 5, there's often an error.
+        # Figure out why.
+        max_steps = 5
+
+        td_root = env.reset()
+
+        def recursive_check(tree, max_steps, cur_steps=0, path=()):
+            assert cur_steps <= max_steps
+
+            if cur_steps == max_steps:
+                assert tree.subtree is None
+
+            elif tree.subtree is None:
+                assert tree.rollout[-1]["next", "done"]
+
+            else:
+                assert len(tree.subtree) <= max_actions_per_step
+                for subtree_idx, subtree in enumerate(tree.subtree):
+                    assert (
+                        subtree.rollout[-1]["next", "pgn_hash"]
+                        == subtree.node_data["pgn_hash"]
+                    ).all()
+                    assert subtree.parent.node_data is tree.node_data
+                    assert subtree.parent.rollout is tree.rollout
+                    if cur_steps > 0:
+                        assert (
+                            subtree.rollout[0]["pgn_hash"] == tree.node_data["pgn_hash"]
+                        ).all()
+                    recursive_check(
+                        subtree,
+                        max_steps,
+                        cur_steps + subtree.rollout.shape[0],
+                        path + (subtree_idx,),
+                    )
+
+        for cur_max_steps in range(1, max_steps + 1):
+            forest.traverse_breadth_first(td_root, env, max_actions_per_step)
+            recursive_check(forest.get_tree(td_root), cur_max_steps)
+
+    def test_to_string(self):
+        forest = MCTSForest()
+
+        td_root = TensorDict(
+            {
+                "observation": 0,
+            }
+        )
+
+        rollouts_data = [
+            # [(action, obs), ...]
+            [(3, 123), (1, 456)],
+            [(2, 359), (2, 3094)],
+            [(3, 123), (9, 392), (6, 989), (20, 809), (21, 847)],
+            [(1, 75)],
+            [(3, 123), (0, 948)],
+            [(2, 359), (2, 3094), (10, 68)],
+            [(2, 359), (2, 3094), (11, 9045)],
+        ]
+
+        obs_string_check = "\n".join(
+            [
+                "(0,) [123]",
+                " (0, 0) [456]",
+                " (0, 1) [392, 989, 809, 847]",
+                " (0, 2) [948]",
+                "(1,) [359, 3094]",
+                " (1, 0) [68]",
+                " (1, 1) [9045]",
+                "(2,) [75]",
+            ]
+        )
+
+        action_string_check = "\n".join(
+            [
+                "(0,) [3]",
+                " (0, 0) [1]",
+                " (0, 1) [9, 6, 20, 21]",
+                " (0, 2) [0]",
+                "(1,) [2, 2]",
+                " (1, 0) [10]",
+                " (1, 1) [11]",
+                "(2,) [1]",
+            ]
+        )
+
+        for rollout_data in rollouts_data:
+            td = td_root.clone().unsqueeze(0)
+            for action, obs in rollout_data:
+                td = td.update(
+                    TensorDict(
+                        {
+                            "action": [action],
+                            "next": TensorDict({"observation": [obs]}, [1]),
+                        },
+                        [1],
+                    )
+                )
+                forest.extend(td)
+                td = td["next"].clone()
+
+        obs_string = forest.to_string(
+            td_root, lambda tree: tree.rollout["next", "observation"].tolist()
+        )
+        assert obs_string == obs_string_check
+
+        action_string = forest.to_string(
+            td_root, lambda tree: tree.rollout["action"].tolist()
+        )
+        assert action_string == action_string_check
 
 
 if __name__ == "__main__":

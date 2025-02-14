@@ -1164,6 +1164,108 @@ class MCTSForest:
     def __len__(self):
         return len(self.data_map)
 
+    def __contains__(self, root: TensorDictBase):
+        if self.node_map is None:
+            return False
+        return root.select(*self.node_map.in_keys) in self.node_map
+
+    def traverse_breadth_first(
+        self, td_root, env, max_actions_per_step=None, *, _tree=None
+    ):
+        """Adds one level of nodes to all of the leaf nodes in a tree.
+
+        Args:
+            td_root (TensorDict): The state at the root node of the tree. If no
+                tree with this root exists yet, it is created.
+            env (EnvBase): The environment the take steps in.
+            max_actions_per_step (int, optional): If given, the number of
+                actions taken at each node is limited to this number. A
+                random subset of the possible actions is chosen.
+        """
+        # If tree has not been given, then try to obtain it from the given
+        # root. If the tree has not even been created yet for this root, we
+        # will create it further down.
+        if _tree is None and td_root in self:
+            _tree = self.get_tree(td_root)
+
+        # If either this is a leaf node or a tree hasn't even been added for
+        # this root yet, then generate all actions
+        if _tree is None or _tree.subtree is None:
+            if _tree is None:
+                td_cur = td_root
+            else:
+                # If this node is terminal, then there is nothing left to do.
+                if _tree.is_terminal:
+                    return
+
+                td_cur = _tree.rollout[-1]["next"]
+
+            actions = env.all_actions(td_cur)
+            num_actions = actions.shape[0]
+
+            if max_actions_per_step is not None and num_actions > max_actions_per_step:
+                # Limit the actions to a random subset
+                rand_action_indices = torch.randperm(num_actions)
+                actions = actions[rand_action_indices[:max_actions_per_step]]
+
+            # Take a step in the environment with each of the actions, and
+            # add a new node in the tree for each of the results.
+            for action in actions:
+                td = env.step(env.reset(td_cur.clone()).update(action)).unsqueeze(0)
+
+                if _tree is not None:
+                    td = td.select(*_tree.rollout.keys(include_nested=True))
+
+                # If the tree doesn't exist yet, the first extend creates it.
+                self.extend(td)
+
+        # If this tree is not a leaf, traverse each of the branches.
+        else:
+            for subtree in _tree.subtree:
+                self.traverse_breadth_first(
+                    td_root, env, max_actions_per_step, _tree=subtree
+                )
+
+    def to_string(self, td_root, node_format_fn):
+        """Generates a string representation of a tree in the forest.
+
+        This function can pull out information from each of the nodes in a tree,
+        so it can be useful for debugging. The nodes are listed line-by-line.
+        Each line contains the path to the node, followed by the string
+        representation of that node generated with :arg:`node_format_fn`. Each
+        line is indented according to number of steps in the path required to
+        get to the corresponding node.
+
+        Args:
+            td_root (TensorDict): Root of the tree.
+
+            node_format_fn (Callable): User-defined function to generate a
+                string for each node of the tree. The signature must be
+                ``(Tree) -> Any``, and the output must be convertible to
+                a string.
+        """
+        tree = self.get_tree(td_root)
+
+        queue = [
+            # tree, path
+            (tree, ()),
+        ]
+
+        strings = []
+
+        while len(queue) > 0:
+            tree, path = queue.pop()
+            if tree.subtree is not None:
+                for subtree_idx, subtree in reversed(list(enumerate(tree.subtree))):
+                    queue.append((subtree, path + (subtree_idx,)))
+
+            if tree.rollout is not None:
+                level = len(path)
+                string = node_format_fn(tree)
+                strings.append(f"{' ' * (level - 1)}{path} {string}")
+
+        return "\n".join(strings)
+
 
 def _make_list_of_nestedkeys(obj: Any, attr: str) -> List[NestedKey]:
     if obj is None:
